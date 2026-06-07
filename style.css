@@ -1,0 +1,30 @@
+#yt-transcript-copy-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  margin: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: #065fd4;
+  color: #fff;
+  font-family: "Roboto", Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+#yt-transcript-copy-btn:hover {
+  background: #0051b5;
+}
+
+#yt-transcript-copy-btn.copied {
+  background: #1a8c1a;
+}
+
+#yt-transcript-copy-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
