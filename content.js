@@ -3,19 +3,33 @@
   const CHECK_ICON = `<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>`;
   const QUIZ_ICON = `<svg viewBox="0 0 24 24"><path d="M4 6H2v14a2 2 0 0 0 2 2h14v-2H4V6zm16-4H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"/></svg>`;
 
-  let btnInserted = false;
-
   /* ── Transcript extraction ── */
 
+  function getTranscriptSegments() {
+    const selectors = [
+      "ytd-transcript-segment-renderer",
+      "[target-id='engagement-panel-searchable-transcript'] .segment",
+      ".ytd-transcript-body-renderer .segment",
+    ];
+    for (const sel of selectors) {
+      const els = document.querySelectorAll(sel);
+      if (els.length) return els;
+    }
+    return [];
+  }
+
   function extractAndClean() {
-    const segments = document.querySelectorAll(
-      "ytd-transcript-segment-renderer .segment-text"
-    );
+    const segments = getTranscriptSegments();
     if (!segments.length) return null;
 
-    const rawLines = Array.from(segments).map((el) =>
-      el.textContent.trim().replace(/\s+/g, " ")
-    );
+    const rawLines = Array.from(segments).map((el) => {
+      const textEl = el.querySelector(".segment-text") ||
+                     el.querySelector("yt-formatted-string.segment-text") ||
+                     el;
+      let text = textEl.textContent.trim().replace(/\s+/g, " ");
+      text = text.replace(/^\d{1,2}:\d{2}(:\d{2})?\s*/g, "");
+      return text;
+    }).filter((t) => t.length > 0);
 
     let text = rawLines.join(" ");
     text = text.replace(/ {2,}/g, " ");
@@ -58,15 +72,11 @@
       "okay","yeah","yes","no","don","doesn","didn","won","wasn","aren",
       "couldn","shouldn","wouldn","isn","re","ve","ll","um","uh"
     ]);
-
     const words = sentence.replace(/[.,!?;:'"()\[\]{}]/g, "").split(/\s+/);
     const candidates = words.filter(
       (w) => w.length > 3 && !stopWords.has(w.toLowerCase())
     );
-
-    if (candidates.length === 0) return null;
-
-    // prefer longer, less common words
+    if (!candidates.length) return null;
     candidates.sort((a, b) => b.length - a.length);
     return candidates[0];
   }
@@ -74,26 +84,16 @@
   function generateFillInBlank(sentence) {
     const key = getKeyPhrase(sentence);
     if (!key) return null;
-
     const blank = sentence.replace(
-      new RegExp(`\\b${key}\\b`, "i"),
+      new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i"),
       "_________"
     );
     if (blank === sentence) return null;
-
-    return {
-      type: "fill",
-      question: blank,
-      answer: key,
-    };
+    return { type: "fill", question: blank, answer: key };
   }
 
   function generateTrueFalse(sentence) {
-    return {
-      type: "tf",
-      question: sentence,
-      answer: "True",
-    };
+    return { type: "tf", question: sentence, answer: "True" };
   }
 
   function generateOpenEnded(sentence) {
@@ -104,10 +104,8 @@
       "Describe the concept discussed:",
       "What can you infer from the following statement:",
     ];
-
     const key = getKeyPhrase(sentence);
     const starter = starters[Math.floor(Math.random() * starters.length)];
-
     return {
       type: "open",
       question: key
@@ -122,31 +120,25 @@
     if (sentences.length < 3) return null;
 
     const videoTitle =
-      document.querySelector(
-        "yt-formatted-string.style-scope.ytd-watch-metadata"
-      )?.textContent?.trim() || "YouTube Video";
+      document.querySelector("h1.ytd-watch-metadata yt-formatted-string")?.textContent?.trim() ||
+      document.querySelector("yt-formatted-string.ytd-watch-metadata")?.textContent?.trim() ||
+      document.querySelector("#title h1")?.textContent?.trim() ||
+      document.title.replace(" - YouTube", "") ||
+      "YouTube Video";
 
-    // pick sentences for each question type
     const pool = pickRandom(sentences, Math.min(sentences.length, 30));
-
     const questions = [];
     let qNum = 1;
 
-    // ── Section 1: Fill in the Blank (5 questions) ──
     const fillPool = pickRandom(pool, 12);
     for (const s of fillPool) {
       if (questions.filter((q) => q.type === "fill").length >= 5) break;
       const q = generateFillInBlank(s);
-      if (q) {
-        q.num = qNum++;
-        questions.push(q);
-      }
+      if (q) { q.num = qNum++; questions.push(q); }
     }
 
-    // ── Section 2: True or False (5 questions) ──
     const tfPool = pickRandom(
-      pool.filter((s) => !fillPool.includes(s)).concat(pickRandom(pool, 5)),
-      10
+      pool.filter((s) => !fillPool.includes(s)).concat(pickRandom(pool, 5)), 10
     );
     for (const s of tfPool) {
       if (questions.filter((q) => q.type === "tf").length >= 5) break;
@@ -155,7 +147,6 @@
       questions.push(q);
     }
 
-    // ── Section 3: Open-Ended (3 questions) ──
     const openPool = pickRandom(sentences, 8);
     for (const s of openPool) {
       if (questions.filter((q) => q.type === "open").length >= 3) break;
@@ -164,59 +155,34 @@
       questions.push(q);
     }
 
-    // ── Build output ──
-    let output = "";
-    output += `═══════════════════════════════════════════\n`;
+    let output = `═══════════════════════════════════════════\n`;
     output += `  QUIZ / TEST\n`;
     output += `  "${videoTitle}"\n`;
     output += `═══════════════════════════════════════════\n\n`;
 
-    // Fill in the Blank section
     const fills = questions.filter((q) => q.type === "fill");
     if (fills.length) {
-      output += `── SECTION A: FILL IN THE BLANK ──\n`;
-      output += `Directions: Fill in the blank with the correct word.\n\n`;
-      for (const q of fills) {
-        output += `${q.num}. ${q.question}\n\n`;
-      }
+      output += `── SECTION A: FILL IN THE BLANK ──\nDirections: Fill in the blank with the correct word.\n\n`;
+      for (const q of fills) output += `${q.num}. ${q.question}\n\n`;
       output += `\n`;
     }
 
-    // True or False section
     const tfs = questions.filter((q) => q.type === "tf");
     if (tfs.length) {
-      output += `── SECTION B: TRUE OR FALSE ──\n`;
-      output += `Directions: Write TRUE if the statement is correct based on the video.\n\n`;
-      for (const q of tfs) {
-        output += `${q.num}. ${q.question}\n    [ TRUE / FALSE ]\n\n`;
-      }
+      output += `── SECTION B: TRUE OR FALSE ──\nDirections: Write TRUE if the statement is correct based on the video.\n\n`;
+      for (const q of tfs) output += `${q.num}. ${q.question}\n    [ TRUE / FALSE ]\n\n`;
       output += `\n`;
     }
 
-    // Open-Ended section
     const opens = questions.filter((q) => q.type === "open");
     if (opens.length) {
-      output += `── SECTION C: SHORT ANSWER / ESSAY ──\n`;
-      output += `Directions: Answer in 2-3 sentences.\n\n`;
-      for (const q of opens) {
-        output += `${q.num}. ${q.question}\n\n\n`;
-      }
+      output += `── SECTION C: SHORT ANSWER / ESSAY ──\nDirections: Answer in 2-3 sentences.\n\n`;
+      for (const q of opens) output += `${q.num}. ${q.question}\n\n\n`;
       output += `\n`;
     }
 
-    // Answer Key
-    output += `═══════════════════════════════════════════\n`;
-    output += `  ANSWER KEY\n`;
-    output += `═══════════════════════════════════════════\n\n`;
-    for (const q of questions) {
-      const prefix =
-        q.type === "fill"
-          ? `${q.num}. ${q.answer}`
-          : q.type === "tf"
-          ? `${q.num}. ${q.answer}`
-          : `${q.num}. ${q.answer}`;
-      output += `${prefix}\n`;
-    }
+    output += `═══════════════════════════════════════════\n  ANSWER KEY\n═══════════════════════════════════════════\n\n`;
+    for (const q of questions) output += `${q.num}. ${q.answer}\n`;
 
     return output;
   }
@@ -238,116 +204,149 @@
     }
   }
 
-  /* ── Button: Copy Transcript ── */
+  /* ── Button factory ── */
+
+  function flashButton(btn, icon, label, cls, resetIcon, resetLabel, delay) {
+    btn.classList.add(cls);
+    btn.innerHTML = `${icon}<span>${label}</span>`;
+    setTimeout(() => {
+      btn.classList.remove(cls);
+      btn.innerHTML = `${resetIcon}<span>${resetLabel}</span>`;
+    }, delay);
+  }
 
   function createCopyButton() {
     const btn = document.createElement("button");
     btn.id = "yt-transcript-copy-btn";
     btn.className = "yt-transcript-btn";
     btn.innerHTML = `${COPY_ICON}<span>Copy Transcript</span>`;
-
     btn.addEventListener("click", async () => {
       const text = extractAndClean();
       if (!text) {
-        btn.querySelector("span").textContent = "No transcript found";
-        setTimeout(() => {
-          btn.querySelector("span").textContent = "Copy Transcript";
-        }, 2000);
+        flashButton(btn, COPY_ICON, "No transcript found", "", COPY_ICON, "Copy Transcript", 2000);
         return;
       }
-
       await copyToClipboard(text);
-      btn.classList.add("copied");
-      btn.innerHTML = `${CHECK_ICON}<span>Copied!</span>`;
-      setTimeout(() => {
-        btn.classList.remove("copied");
-        btn.innerHTML = `${COPY_ICON}<span>Copy Transcript</span>`;
-      }, 2000);
+      flashButton(btn, CHECK_ICON, "Copied!", "copied", COPY_ICON, "Copy Transcript", 2000);
     });
-
     return btn;
   }
-
-  /* ── Button: Summarize as Test ── */
 
   function createQuizButton() {
     const btn = document.createElement("button");
     btn.id = "yt-transcript-quiz-btn";
     btn.className = "yt-transcript-btn";
     btn.innerHTML = `${QUIZ_ICON}<span>Summarize as Test</span>`;
-
     btn.addEventListener("click", async () => {
       const text = extractAndClean();
       if (!text) {
-        btn.querySelector("span").textContent = "No transcript found";
-        setTimeout(() => {
-          btn.querySelector("span").textContent = "Summarize as Test";
-        }, 2000);
+        flashButton(btn, QUIZ_ICON, "No transcript found", "", QUIZ_ICON, "Summarize as Test", 2000);
         return;
       }
-
       btn.classList.add("loading");
       btn.innerHTML = `${QUIZ_ICON}<span>Generating...</span>`;
-
-      // small delay so the UI updates
       await new Promise((r) => setTimeout(r, 50));
 
       const quiz = generateQuiz(text);
+      btn.classList.remove("loading");
       if (!quiz) {
-        btn.classList.remove("loading");
-        btn.querySelector("span").textContent = "Transcript too short";
-        setTimeout(() => {
-          btn.innerHTML = `${QUIZ_ICON}<span>Summarize as Test</span>`;
-        }, 2000);
+        flashButton(btn, QUIZ_ICON, "Transcript too short", "", QUIZ_ICON, "Summarize as Test", 2000);
         return;
       }
-
       await copyToClipboard(quiz);
-      btn.classList.remove("loading");
-      btn.classList.add("copied");
-      btn.innerHTML = `${CHECK_ICON}<span>Test Copied!</span>`;
-      setTimeout(() => {
-        btn.classList.remove("copied");
-        btn.innerHTML = `${QUIZ_ICON}<span>Summarize as Test</span>`;
-      }, 2500);
+      flashButton(btn, CHECK_ICON, "Test Copied!", "copied", QUIZ_ICON, "Summarize as Test", 2500);
     });
-
     return btn;
   }
 
-  /* ── Insert buttons ── */
+  /* ── Insertion logic ── */
 
-  function tryInsertButtons() {
-    if (document.getElementById("yt-transcript-copy-btn")) return;
-
-    const header = document.querySelector(
-      "ytd-engagement-panel-section-list-renderer[target-id='engagement-panel-searchable-transcript'] #header"
-    );
-    if (!header) {
-      btnInserted = false;
-      return;
-    }
-
+  function createWrapper() {
     const wrapper = document.createElement("div");
     wrapper.id = "yt-transcript-btn-wrapper";
     wrapper.appendChild(createCopyButton());
     wrapper.appendChild(createQuizButton());
-    header.appendChild(wrapper);
-    btnInserted = true;
+    return wrapper;
   }
 
-  /* ── Observer ── */
+  function tryInsert() {
+    if (document.getElementById("yt-transcript-btn-wrapper")) return true;
+
+    // Strategy 1: find the engagement panel for transcript
+    const panelSelectors = [
+      "ytd-engagement-panel-section-list-renderer[target-id='engagement-panel-searchable-transcript']",
+      "ytd-engagement-panel-section-list-renderer[target-id='engagement-panel-structured-description']",
+    ];
+    for (const sel of panelSelectors) {
+      const panel = document.querySelector(sel);
+      if (!panel) continue;
+      // only target transcript panels that actually have transcript content
+      if (!panel.querySelector("ytd-transcript-segment-renderer")) continue;
+      const header =
+        panel.querySelector("ytd-engagement-panel-title-header-renderer") ||
+        panel.querySelector("#header") ||
+        panel;
+      header.appendChild(createWrapper());
+      console.log("[YT Transcript Copier] Inserted via panel header:", sel);
+      return true;
+    }
+
+    // Strategy 2: find transcript renderer directly
+    const transcriptRenderer = document.querySelector("ytd-transcript-renderer");
+    if (transcriptRenderer) {
+      const header = transcriptRenderer.querySelector("#header") || transcriptRenderer;
+      header.appendChild(createWrapper());
+      console.log("[YT Transcript Copier] Inserted via ytd-transcript-renderer");
+      return true;
+    }
+
+    // Strategy 3: find transcript segments and insert before the first one's scroll container
+    const segments = document.querySelectorAll("ytd-transcript-segment-renderer");
+    if (segments.length) {
+      let container = segments[0].parentElement;
+      if (container) {
+        container.parentElement.insertBefore(createWrapper(), container);
+        console.log("[YT Transcript Copier] Inserted above segment list");
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /* ── Continuous polling — never stops ── */
+
+  setInterval(() => {
+    const segments = document.querySelectorAll("ytd-transcript-segment-renderer");
+    if (segments.length) {
+      tryInsert();
+    } else {
+      const wrapper = document.getElementById("yt-transcript-btn-wrapper");
+      if (wrapper) wrapper.remove();
+    }
+  }, 1500);
+
+  /* ── Observer for instant response ── */
 
   const observer = new MutationObserver(() => {
-    const panelVisible = document.querySelector(
-      "ytd-engagement-panel-section-list-renderer[target-id='engagement-panel-searchable-transcript']"
-    );
-    if (panelVisible) {
-      tryInsertButtons();
+    const segments = document.querySelectorAll("ytd-transcript-segment-renderer");
+    if (segments.length) {
+      tryInsert();
     } else {
-      btnInserted = false;
+      const wrapper = document.getElementById("yt-transcript-btn-wrapper");
+      if (wrapper) wrapper.remove();
     }
   });
 
-  observer.observe(document.body, { childList: true, subtree: true });
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+  });
+
+  /* ── YouTube SPA navigation detection ── */
+
+  document.addEventListener("yt-navigate-finish", () => {
+    const wrapper = document.getElementById("yt-transcript-btn-wrapper");
+    if (wrapper) wrapper.remove();
+  });
 })();
